@@ -21,14 +21,12 @@ body {
 }
 
 .game-container {
-    /* Leave room for the title and allow scrolling on very short windows. */
     width: min(100%, 72rem, max(12rem, calc((100dvh - 7rem) * 16 / 9)));
     aspect-ratio: 16 / 9;
     position: relative;
 }
 
 .game-container canvas {
-    /* Let the container size the canvas, not the other way around. */
     position: absolute;
     top: 0;
     left: 0;
