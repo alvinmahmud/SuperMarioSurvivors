@@ -1,9 +1,15 @@
-import { createRoot } from 'react-dom/client'
+import { createRoot } from "react-dom/client";
+import PhaserGame from "./Game";
 
-const container = document.getElementById('root')
+const container = document.getElementById("root");
 
 if (!container) {
-  throw new Error('Missing #root element')
+  throw new Error("Missing #root element");
 }
 
-createRoot(container).render(<h1>SuperMarioSurvivors</h1>)
+createRoot(container).render(
+  <main>
+    <h1>SuperMarioSurvivors</h1>
+    <PhaserGame />
+  </main>,
+);
