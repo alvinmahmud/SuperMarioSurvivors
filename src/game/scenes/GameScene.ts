@@ -1,6 +1,9 @@
 import Phaser from "phaser";
 
 const PLAYER_SPEED = 180;
+const PLAYER_SPRITE_SCALE = 2;
+const MARIO_WALK_ANIMATION = "mario-walk";
+const MARIO_FRAME_DURATION = 150;
 const ENEMY_SPEED = 90;
 const ENEMY_STEP_INTERVAL = 140;
 const KOOPA_FRAME_DURATION = 150;
@@ -26,6 +29,10 @@ export default class GameScene extends Phaser.Scene {
   private enemyDirection = new Phaser.Math.Vector2();
 
   preload() {
+    this.load.spritesheet("mario", "/assets/sprites/mario.png", {
+      frameWidth: 16,
+      frameHeight: 32,
+    });
     this.load.image("goomba", "/assets/sprites/goomba.png");
     this.load.spritesheet("koopa", "/assets/sprites/koopa.png", {
       frameWidth: 16,
@@ -34,12 +41,37 @@ export default class GameScene extends Phaser.Scene {
   }
 
   create() {
-    this.player = this.addSquare(
-      this.scale.width / 2,
-      this.scale.height / 2,
-      SQUARE_SIZE,
-      0xff4444,
-    ).body.setCollideWorldBounds(true);
+    if (!this.anims.exists(MARIO_WALK_ANIMATION)) {
+      this.anims.create({
+        key: MARIO_WALK_ANIMATION,
+        frames: this.anims.generateFrameNumbers("mario", { start: 1, end: 3 }),
+        duration: 3 * MARIO_FRAME_DURATION,
+        repeat: -1,
+      });
+    }
+
+    const { width, height } = this.scale;
+    const mario = this.add
+      .sprite(width / 2, height / 2, "mario", 0)
+      .setScale(PLAYER_SPRITE_SCALE);
+    this.physics.add.existing(mario);
+    if (!(mario.body instanceof Phaser.Physics.Arcade.Body)) {
+      throw new Error("Could not create an Arcade Physics body for Mario");
+    }
+
+    const hitboxSize = SQUARE_SIZE / PLAYER_SPRITE_SCALE;
+    const verticalInset = (mario.displayHeight - SQUARE_SIZE) / 2;
+    this.player = mario.body
+      .setSize(hitboxSize, hitboxSize)
+      .setBoundsRectangle(
+        new Phaser.Geom.Rectangle(
+          0,
+          verticalInset,
+          width,
+          height - 2 * verticalInset,
+        ),
+      )
+      .setCollideWorldBounds(true);
     if (!this.anims.exists(KOOPA_WALK_ANIMATION)) {
       this.anims.create({
         key: KOOPA_WALK_ANIMATION,
@@ -83,6 +115,13 @@ export default class GameScene extends Phaser.Scene {
         .scale(PLAYER_SPEED);
 
       this.player.setVelocity(direction.x, direction.y);
+
+      if (direction.x !== 0) mario.setFlipX(direction.x < 0);
+      if (direction.x !== 0 || direction.y !== 0) {
+        mario.play(MARIO_WALK_ANIMATION, true);
+      } else if (mario.anims.isPlaying) {
+        mario.stop().setFrame(0);
+      }
     };
   }
 
