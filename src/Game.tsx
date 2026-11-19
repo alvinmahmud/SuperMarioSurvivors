@@ -6,12 +6,13 @@ export default function Game() {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<GameScene | null>(null);
   const [screen, setScreen] = useState<GameScreen>("loading");
+  const [defeated, setDefeated] = useState(0);
 
   useEffect(() => {
     const parent = containerRef.current;
     if (!parent) return;
 
-    const scene = new GameScene(setScreen);
+    const scene = new GameScene(setScreen, setDefeated);
     sceneRef.current = scene;
 
     const game = new Phaser.Game({
@@ -43,19 +44,25 @@ export default function Game() {
   return (
     <div className="game-container">
       <div className="game-surface" ref={containerRef} />
+      {screen === "playing" && (
+        <p className="game-score">Enemies defeated: {defeated}</p>
+      )}
       {screen !== "playing" && (
         <div
           className="game-overlay"
           role="group"
           aria-label={screen === "game-over" ? "Game over" : "Start game"}
         >
-          <button
-            type="button"
-            disabled={screen === "loading"}
-            onClick={() => sceneRef.current?.startRun()}
-          >
-            {screen === "game-over" ? "Play Again" : "Start Game"}
-          </button>
+          <div className="game-overlay-content">
+            {screen === "game-over" && <p>Enemies defeated: {defeated}</p>}
+            <button
+              type="button"
+              disabled={screen === "loading"}
+              onClick={() => sceneRef.current?.startRun()}
+            >
+              {screen === "game-over" ? "Play Again" : "Start Game"}
+            </button>
+          </div>
         </div>
       )}
     </div>

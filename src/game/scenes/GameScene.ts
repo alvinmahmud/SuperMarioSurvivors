@@ -14,9 +14,15 @@ const KOOPA_WALK_ANIMATION = "koopa-walk";
 const SQUARE_SIZE = 32;
 const FIREBALL_SCALE = 2;
 const PROJECTILE_SPEED = 360;
-const ATTACK_INTERVAL = 5000;
-const ENEMY_SPAWN_INTERVAL = 2000;
-const MAX_ENEMIES = 10;
+const ATTACK_INTERVAL = 1000;
+const ENEMY_SPAWN_INTERVAL = 1000;
+const MAX_ENEMIES = 5;
+const ENEMY_MAX_HP = { goomba: 3, koopa: 3 };
+const HEALTH_BAR_WIDTH = 26;
+const HEALTH_BAR_HEIGHT = 3;
+const HEALTH_BAR_GAP = 3;
+const KNOCKBACK_SPEED = 95;
+const KNOCKBACK_DURATION = 90;
 
 type MarioForm = "big" | "fire" | "small";
 
@@ -25,9 +31,13 @@ export type GameScreen = "loading" | "start" | "playing" | "game-over";
 type RunPhase = "waiting" | "running" | "dying" | "game-over" | "restarting";
 
 type Enemy = {
-  kind: "goomba" | "koopa";
+  kind: keyof typeof ENEMY_MAX_HP;
   sprite: Phaser.GameObjects.Sprite;
   body: Phaser.Physics.Arcade.Body;
+  healthBar: Phaser.GameObjects.Graphics;
+  hp: number;
+  maxHp: number;
+  knockbackRemaining: number;
   walkTime: number;
 };
 
@@ -37,7 +47,8 @@ export default class GameScene extends Phaser.Scene {
   private mario!: Phaser.GameObjects.Sprite;
   private marioForm: MarioForm = "big";
   private transforming = false;
-  private flower?: Phaser.GameObjects.Image;
+  private pickup?: Phaser.GameObjects.Image;
+  private defeated = 0;
   private attackTimer?: Phaser.Time.TimerEvent;
   private invincibilityTimer?: Phaser.Time.TimerEvent;
   private enemies: Enemy[] = [];
@@ -45,13 +56,17 @@ export default class GameScene extends Phaser.Scene {
   private movePlayer?: () => void;
   private enemyDirection = new Phaser.Math.Vector2();
 
-  constructor(private readonly onScreenChange: (screen: GameScreen) => void) {
+  constructor(
+    private readonly onScreenChange: (screen: GameScreen) => void,
+    private readonly onDefeatedChange: (defeated: number) => void,
+  ) {
     super("GameScene");
   }
 
   preload() {
     this.load.image("mario-death", "/assets/sprites/mario-death.png");
     this.load.image("fire-flower", "/assets/sprites/fire-flower.png");
+    this.load.image("super-mushroom", "/assets/sprites/super-mushroom.png");
     this.load.spritesheet("fire-mario", "/assets/sprites/fire-mario.png", {
       frameWidth: 16,
       frameHeight: 32,
@@ -88,6 +103,9 @@ export default class GameScene extends Phaser.Scene {
     this.createMarioAnimations();
     this.marioForm = "big";
     this.transforming = false;
+    this.defeated = 0;
+    this.onDefeatedChange(this.defeated);
+    this.pickup = undefined;
     this.attackTimer = undefined;
     this.invincibilityTimer = undefined;
 
@@ -101,19 +119,8 @@ export default class GameScene extends Phaser.Scene {
     }
 
     this.mario = mario;
-    const hitboxSize = SQUARE_SIZE / PLAYER_SPRITE_SCALE;
-    const verticalInset = (mario.displayHeight - SQUARE_SIZE) / 2;
-    this.player = mario.body
-      .setSize(hitboxSize, hitboxSize)
-      .setBoundsRectangle(
-        new Phaser.Geom.Rectangle(
-          0,
-          verticalInset,
-          width,
-          height - 2 * verticalInset,
-        ),
-      )
-      .setCollideWorldBounds(true);
+    this.player = mario.body.setCollideWorldBounds(true);
+    this.updatePlayerBounds();
     if (!this.anims.exists(KOOPA_WALK_ANIMATION)) {
       this.anims.create({
         key: KOOPA_WALK_ANIMATION,
@@ -125,7 +132,7 @@ export default class GameScene extends Phaser.Scene {
 
     this.projectiles = this.physics.add.group();
     this.enemies = [];
-    this.spawnFlower();
+    this.spawnPickup("fire-flower");
     this.time.addEvent({
       delay: ENEMY_SPAWN_INTERVAL,
       loop: true,
@@ -189,6 +196,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number) {
+    for (const enemy of this.enemies) this.positionHealthBar(enemy);
     if (this.runPhase !== "running" || this.transforming) return;
 
     const grace = this.invincibilityTimer;
@@ -201,10 +209,11 @@ export default class GameScene extends Phaser.Scene {
       return;
     }
 
-    if (this.flower && this.marioForm === "big" && this.isTouchingFlower()) {
-      this.flower.destroy();
-      this.flower = undefined;
-      this.transformMario("fire", false);
+    const pickup = this.pickup;
+    if (pickup && this.isTouchingPickup(pickup)) {
+      pickup.destroy();
+      this.pickup = undefined;
+      this.transformMario(this.marioForm === "small" ? "big" : "fire", false);
       return;
     }
     if (grace) {
@@ -287,7 +296,9 @@ export default class GameScene extends Phaser.Scene {
     }
 
     const animation =
-      form === "small" ? MARIO_SHRINK_ANIMATION : MARIO_FIRE_TRANSITION;
+      form === "small" || this.marioForm === "small"
+        ? MARIO_SHRINK_ANIMATION
+        : MARIO_FIRE_TRANSITION;
     this.mario.once(
       `${Phaser.Animations.Events.ANIMATION_COMPLETE_KEY}${animation}`,
       () => this.finishTransformation(form, fromHit),
@@ -303,12 +314,11 @@ export default class GameScene extends Phaser.Scene {
     this.marioForm = form;
     this.transforming = false;
     this.mario.setTexture(`${form}-mario`, 0).setAlpha(fromHit ? 0.35 : 1);
+    this.updatePlayerBounds();
     if (form === "small") {
-      const hitboxSize = SQUARE_SIZE / PLAYER_SPRITE_SCALE;
-      this.player
-        .setSize(hitboxSize, hitboxSize)
-        .setBoundsRectangle(this.physics.world.bounds)
-        .updateFromGameObject();
+      this.spawnPickup("super-mushroom");
+    } else if (form === "big") {
+      this.spawnPickup("fire-flower");
     }
 
     this.resumeGameplay();
@@ -337,29 +347,44 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
-  private spawnFlower() {
+  private updatePlayerBounds() {
     const { width, height } = this.scale;
+    const hitboxSize = SQUARE_SIZE / PLAYER_SPRITE_SCALE;
+    const verticalInset = (this.mario.displayHeight - SQUARE_SIZE) / 2;
+    this.player
+      .setSize(hitboxSize, hitboxSize)
+      .setBoundsRectangle(
+        new Phaser.Geom.Rectangle(
+          0,
+          verticalInset,
+          width,
+          height - 2 * verticalInset,
+        ),
+      )
+      .updateFromGameObject();
+  }
+
+  private spawnPickup(texture: "fire-flower" | "super-mushroom") {
+    this.pickup?.destroy();
+    const { width, height } = this.scale;
+    const { x: playerX, y: playerY } = this.player.center;
     const margin = SQUARE_SIZE;
+    const verticalMargin = texture === "super-mushroom" ? 2 * margin : margin;
     let x: number;
     let y: number;
     do {
       x = Phaser.Math.Between(margin, width - margin);
-      y = Phaser.Math.Between(margin, height - margin);
-    } while (
-      Phaser.Math.Distance.Squared(x, y, width / 2, height / 2) <
-      80 ** 2
-    );
-    this.flower = this.add.image(x, y, "fire-flower").setScale(2);
+      y = Phaser.Math.Between(verticalMargin, height - verticalMargin);
+    } while (Phaser.Math.Distance.Squared(x, y, playerX, playerY) < 80 ** 2);
+    this.pickup = this.add.image(x, y, texture).setScale(2);
   }
 
-  private isTouchingFlower() {
-    const flower = this.flower;
+  private isTouchingPickup(pickup: Phaser.GameObjects.Image) {
     return (
-      flower &&
-      Math.abs(this.player.center.x - flower.x) <=
-        this.player.halfWidth + flower.displayWidth / 2 &&
-      Math.abs(this.player.center.y - flower.y) <=
-        this.player.halfHeight + flower.displayHeight / 2
+      Math.abs(this.player.center.x - pickup.x) <=
+        this.player.halfWidth + pickup.displayWidth / 2 &&
+      Math.abs(this.player.center.y - pickup.y) <=
+        this.player.halfHeight + pickup.displayHeight / 2
     );
   }
 
@@ -389,7 +414,7 @@ export default class GameScene extends Phaser.Scene {
     this.freezeGameplay();
     this.player.enable = false;
     const mario = this.mario;
-    mario.stop().setTexture("mario-death").setFlipX(false).setDepth(1);
+    mario.stop().setTexture("mario-death").setFlipX(false).setDepth(2);
 
     this.tweens.chain({
       targets: mario,
@@ -432,12 +457,19 @@ export default class GameScene extends Phaser.Scene {
       throw new Error(`Could not create an Arcade Physics body for ${kind}`);
     }
 
-    const enemy = {
+    const maxHp = ENEMY_MAX_HP[kind];
+    const enemy: Enemy = {
       kind,
       sprite,
       body: sprite.body.setCollideWorldBounds(true),
+      healthBar: this.add.graphics().setDepth(1),
+      hp: maxHp,
+      maxHp,
+      knockbackRemaining: 0,
       walkTime: 0,
     };
+    this.drawHealthBar(enemy);
+    this.positionHealthBar(enemy);
     const overlap = this.physics.add.overlap(
       sprite,
       this.projectiles,
@@ -447,8 +479,8 @@ export default class GameScene extends Phaser.Scene {
           !(projectile instanceof Phaser.GameObjects.Sprite)
         )
           return;
-        overlap.destroy();
         this.hitEnemy(enemy, projectile);
+        if (enemy.hp === 0) overlap.destroy();
       },
     );
     return enemy;
@@ -457,6 +489,11 @@ export default class GameScene extends Phaser.Scene {
   private updateEnemy(enemy: Enemy, delta: number) {
     const { body, sprite } = enemy;
     if (!body.enable) return;
+
+    if (enemy.knockbackRemaining > 0) {
+      enemy.knockbackRemaining -= delta;
+      return;
+    }
 
     if (this.isTouchingPlayer(enemy)) {
       body.stop();
@@ -518,11 +555,53 @@ export default class GameScene extends Phaser.Scene {
     );
   }
 
+  private drawHealthBar(enemy: Enemy) {
+    const ratio = enemy.hp / enemy.maxHp;
+    const color =
+      ratio <= 1 / 3 ? 0xef4444 : ratio <= 2 / 3 ? 0xfacc15 : 0x22c55e;
+    enemy.healthBar
+      .clear()
+      .fillStyle(0x111827)
+      .fillRect(0, 0, HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT)
+      .fillStyle(color)
+      .fillRect(0, 0, HEALTH_BAR_WIDTH * ratio, HEALTH_BAR_HEIGHT);
+  }
+
+  private positionHealthBar({ body, healthBar }: Enemy) {
+    healthBar.setPosition(
+      body.center.x - HEALTH_BAR_WIDTH / 2,
+      Math.min(
+        body.bottom + HEALTH_BAR_GAP,
+        this.scale.height - HEALTH_BAR_HEIGHT,
+      ),
+    );
+  }
+
   private hitEnemy(enemy: Enemy, projectile: Phaser.GameObjects.Sprite) {
+    const projectileBody = projectile.body;
+    if (projectileBody instanceof Phaser.Physics.Arcade.Body) {
+      this.enemyDirection
+        .copy(projectileBody.velocity)
+        .normalize()
+        .scale(KNOCKBACK_SPEED);
+    }
     projectile.destroy();
+
+    enemy.hp -= 1;
+    if (enemy.hp > 0) {
+      this.drawHealthBar(enemy);
+      if (projectileBody instanceof Phaser.Physics.Arcade.Body) {
+        enemy.body.setVelocity(this.enemyDirection.x, this.enemyDirection.y);
+        enemy.knockbackRemaining = KNOCKBACK_DURATION;
+      }
+      return;
+    }
+
     enemy.body.enable = false;
+    enemy.healthBar.destroy();
     enemy.sprite.destroy();
     this.enemies.splice(this.enemies.indexOf(enemy), 1);
+    this.onDefeatedChange(++this.defeated);
   }
 
   private clearOffscreenProjectiles() {
