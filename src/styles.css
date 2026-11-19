@@ -43,10 +43,10 @@ body {
     display: block;
 }
 
+.game-time,
 .game-score {
     position: absolute;
     top: 0.5rem;
-    right: 0.5rem;
     margin: 0;
     padding: 0.35rem 0.55rem;
     background: rgb(0 0 0 / 60%);
@@ -55,6 +55,22 @@ body {
         600 clamp(0.75rem, 2vw, 1rem) system-ui,
         sans-serif;
     pointer-events: none;
+}
+
+.game-time {
+    left: 0.5rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.game-score {
+    right: 0.5rem;
+}
+
+.game-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    font-variant-numeric: tabular-nums;
 }
 
 .game-overlay {

@@ -66,6 +66,7 @@ export default class GameScene extends Phaser.Scene {
   constructor(
     private readonly onScreenChange: (screen: GameScreen) => void,
     private readonly onDefeatedChange: (defeated: number) => void,
+    private readonly onElapsedChange: (seconds: number) => void,
   ) {
     super("GameScene");
   }
@@ -125,6 +126,7 @@ export default class GameScene extends Phaser.Scene {
     this.transforming = false;
     this.defeated = 0;
     this.onDefeatedChange(this.defeated);
+    this.onElapsedChange(0);
     this.pickup = undefined;
     this.attackTimer = undefined;
     this.invincibilityTimer = undefined;
@@ -190,6 +192,12 @@ export default class GameScene extends Phaser.Scene {
   startRun() {
     if (this.runPhase === "waiting") {
       this.runPhase = "running";
+      let elapsedSeconds = 0;
+      this.time.addEvent({
+        delay: 1000,
+        loop: true,
+        callback: () => this.onElapsedChange(++elapsedSeconds),
+      });
       this.resumeGameplay();
       this.onScreenChange("playing");
     } else if (this.runPhase === "game-over") {

@@ -7,12 +7,16 @@ export default function Game() {
   const sceneRef = useRef<GameScene | null>(null);
   const [screen, setScreen] = useState<GameScreen>("loading");
   const [defeated, setDefeated] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const minutes = String(Math.floor(elapsedSeconds / 60)).padStart(2, "0");
+  const seconds = String(elapsedSeconds % 60).padStart(2, "0");
+  const survivalTime = `${minutes}:${seconds}`;
 
   useEffect(() => {
     const parent = containerRef.current;
     if (!parent) return;
 
-    const scene = new GameScene(setScreen, setDefeated);
+    const scene = new GameScene(setScreen, setDefeated, setElapsedSeconds);
     sceneRef.current = scene;
 
     const game = new Phaser.Game({
@@ -45,7 +49,10 @@ export default function Game() {
     <div className="game-container">
       <div className="game-surface" ref={containerRef} />
       {screen === "playing" && (
-        <p className="game-score">Enemies defeated: {defeated}</p>
+        <>
+          <p className="game-time">Time: {survivalTime}</p>
+          <p className="game-score">Enemies defeated: {defeated}</p>
+        </>
       )}
       {screen !== "playing" && (
         <div
@@ -54,7 +61,12 @@ export default function Game() {
           aria-label={screen === "game-over" ? "Game over" : "Start game"}
         >
           <div className="game-overlay-content">
-            {screen === "game-over" && <p>Enemies defeated: {defeated}</p>}
+            {screen === "game-over" && (
+              <p className="game-stats">
+                <span>Enemies defeated: {defeated}</span>
+                <span>Time: {survivalTime}</span>
+              </p>
+            )}
             <button
               type="button"
               disabled={screen === "loading"}
