@@ -9,7 +9,14 @@ if (!container) {
 
 createRoot(container).render(
   <main className="game-page">
-    <h1>Super Mario Survivors</h1>
+    <h1>
+      <img
+        src="/assets/game-logo.png"
+        alt="Super Mario Survivors"
+        width={1024}
+        height={162}
+      />
+    </h1>
     <PhaserGame />
   </main>,
 );

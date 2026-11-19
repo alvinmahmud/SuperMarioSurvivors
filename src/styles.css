@@ -15,9 +15,14 @@ body {
 }
 
 .game-page h1 {
+    width: min(100%, 25rem);
     margin: 0;
-    font-size: clamp(1.5rem, 4vw, 2rem);
-    text-align: center;
+}
+
+.game-page h1 img {
+    display: block;
+    width: 100%;
+    height: auto;
 }
 
 .game-container {

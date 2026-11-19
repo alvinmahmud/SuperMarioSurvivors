@@ -71,36 +71,47 @@ export default class GameScene extends Phaser.Scene {
   }
 
   preload() {
-    this.load.image("mario-death", "/assets/sprites/mario-death.png");
-    this.load.image("fire-flower", "/assets/sprites/fire-flower.png");
-    this.load.image("super-mushroom", "/assets/sprites/super-mushroom.png");
-    this.load.spritesheet("fire-mario", "/assets/sprites/fire-mario.png", {
-      frameWidth: 16,
-      frameHeight: 32,
-    });
-    this.load.spritesheet("fireball", "/assets/sprites/fireball.png", {
-      frameWidth: 8,
-      frameHeight: 8,
-    });
-    this.load.spritesheet("big-mario", "/assets/sprites/big-mario.png", {
-      frameWidth: 16,
-      frameHeight: 32,
-    });
+    this.load.image("mario-death", "/assets/sprites/player/mario-death.png");
+    this.load.image("fire-flower", "/assets/sprites/items/fire-flower.png");
+    this.load.image(
+      "super-mushroom",
+      "/assets/sprites/items/super-mushroom.png",
+    );
     this.load.spritesheet(
-      "mario-transform",
-      "/assets/sprites/mario-transform.png",
+      "fire-mario",
+      "/assets/sprites/player/fire-mario.png",
       {
         frameWidth: 16,
         frameHeight: 32,
       },
     );
-    this.load.spritesheet("small-mario", "/assets/sprites/small-mario.png", {
-      frameWidth: 16,
-      frameHeight: 16,
+    this.load.spritesheet("fireball", "/assets/sprites/fireball.png", {
+      frameWidth: 8,
+      frameHeight: 8,
     });
-    this.load.image("goomba", "/assets/sprites/goomba.png");
+    this.load.spritesheet("big-mario", "/assets/sprites/player/big-mario.png", {
+      frameWidth: 16,
+      frameHeight: 32,
+    });
+    this.load.spritesheet(
+      "mario-transform",
+      "/assets/sprites/player/mario-transform.png",
+      {
+        frameWidth: 16,
+        frameHeight: 32,
+      },
+    );
+    this.load.spritesheet(
+      "small-mario",
+      "/assets/sprites/player/small-mario.png",
+      {
+        frameWidth: 16,
+        frameHeight: 16,
+      },
+    );
+    this.load.image("goomba", "/assets/sprites/enemies/goomba.png");
     for (const kind of KOOPA_KINDS) {
-      this.load.spritesheet(kind, `/assets/sprites/${kind}.png`, {
+      this.load.spritesheet(kind, `/assets/sprites/enemies/${kind}.png`, {
         frameWidth: 16,
         frameHeight: 24,
       });
