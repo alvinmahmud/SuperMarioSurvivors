@@ -2,9 +2,10 @@ import Phaser from "phaser";
 
 const PLAYER_SPEED = 180;
 const PLAYER_SPRITE_SCALE = 2;
-const MARIO_WALK_ANIMATION = "small-mario-walk";
-const MARIO_FRAME_DURATION = 100;
-const ENEMY_SPEED = 90;
+const MARIO_SHRINK_ANIMATION = "mario-shrink";
+const MARIO_INVINCIBILITY = 1500;
+const MARIO_BLINK_INTERVAL = 100;
+const ENEMY_SPEED = 55;
 const ENEMY_STEP_INTERVAL = 140;
 const KOOPA_FRAME_DURATION = 150;
 const KOOPA_WALK_ANIMATION = "koopa-walk";
@@ -23,12 +24,27 @@ type Enemy = {
 
 export default class GameScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Body;
+  private mario!: Phaser.GameObjects.Sprite;
+  private marioForm: "big" | "shrinking" | "small" = "big";
+  private invincibilityTimer?: Phaser.Time.TimerEvent;
   private enemies: Enemy[] = [];
   private projectiles!: Phaser.Physics.Arcade.Group;
   private movePlayer?: () => void;
   private enemyDirection = new Phaser.Math.Vector2();
 
   preload() {
+    this.load.spritesheet("big-mario", "/assets/sprites/big-mario.png", {
+      frameWidth: 16,
+      frameHeight: 32,
+    });
+    this.load.spritesheet(
+      "mario-transform",
+      "/assets/sprites/mario-transform.png",
+      {
+        frameWidth: 16,
+        frameHeight: 32,
+      },
+    );
     this.load.spritesheet("small-mario", "/assets/sprites/small-mario.png", {
       frameWidth: 16,
       frameHeight: 16,
@@ -41,28 +57,33 @@ export default class GameScene extends Phaser.Scene {
   }
 
   create() {
-    if (!this.anims.exists(MARIO_WALK_ANIMATION)) {
-      this.anims.create({
-        key: MARIO_WALK_ANIMATION,
-        frames: this.anims.generateFrameNumbers("small-mario", {
-          start: 1,
-          end: 3,
-        }),
-        duration: 3 * MARIO_FRAME_DURATION,
-        repeat: -1,
-      });
-    }
+    this.createMarioAnimations();
+    this.marioForm = "big";
+    this.invincibilityTimer = undefined;
 
     const { width, height } = this.scale;
     const mario = this.add
-      .sprite(width / 2, height / 2, "small-mario", 0)
+      .sprite(width / 2, height / 2, "big-mario", 0)
       .setScale(PLAYER_SPRITE_SCALE);
     this.physics.add.existing(mario);
     if (!(mario.body instanceof Phaser.Physics.Arcade.Body)) {
       throw new Error("Could not create an Arcade Physics body for Mario");
     }
 
-    this.player = mario.body.setCollideWorldBounds(true);
+    this.mario = mario;
+    const hitboxSize = SQUARE_SIZE / PLAYER_SPRITE_SCALE;
+    const verticalInset = (mario.displayHeight - SQUARE_SIZE) / 2;
+    this.player = mario.body
+      .setSize(hitboxSize, hitboxSize)
+      .setBoundsRectangle(
+        new Phaser.Geom.Rectangle(
+          0,
+          verticalInset,
+          width,
+          height - 2 * verticalInset,
+        ),
+      )
+      .setCollideWorldBounds(true);
     if (!this.anims.exists(KOOPA_WALK_ANIMATION)) {
       this.anims.create({
         key: KOOPA_WALK_ANIMATION,
@@ -109,7 +130,7 @@ export default class GameScene extends Phaser.Scene {
 
       if (direction.x !== 0) mario.setFlipX(direction.x < 0);
       if (direction.x !== 0 || direction.y !== 0) {
-        mario.play(MARIO_WALK_ANIMATION, true);
+        mario.play(`${this.marioForm}-mario-walk`, true);
       } else if (mario.anims.isPlaying) {
         mario.stop().setFrame(0);
       }
@@ -117,6 +138,22 @@ export default class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number) {
+    if (this.marioForm === "shrinking") return;
+
+    if (
+      this.marioForm === "big" &&
+      this.enemies.some((enemy) => this.isTouchingPlayer(enemy))
+    ) {
+      this.shrinkMario();
+      return;
+    }
+
+    const grace = this.invincibilityTimer;
+    if (grace) {
+      const blink = Math.floor(grace.getElapsed() / MARIO_BLINK_INTERVAL) % 2;
+      this.mario.setAlpha(blink === 0 ? 0.35 : 1);
+    }
+
     this.movePlayer?.();
 
     this.clearOffscreenProjectiles();
@@ -124,6 +161,73 @@ export default class GameScene extends Phaser.Scene {
     for (const enemy of this.enemies) {
       this.updateEnemy(enemy, delta);
     }
+  }
+
+  private createMarioAnimations() {
+    for (const [texture, duration] of [
+      ["big-mario", 450],
+      ["small-mario", 300],
+    ] as const) {
+      const key = `${texture}-walk`;
+      if (this.anims.exists(key)) continue;
+      this.anims.create({
+        key,
+        frames: this.anims.generateFrameNumbers(texture, { start: 1, end: 3 }),
+        duration,
+        repeat: -1,
+      });
+    }
+
+    if (this.anims.exists(MARIO_SHRINK_ANIMATION)) return;
+    this.anims.create({
+      key: MARIO_SHRINK_ANIMATION,
+      frames: this.anims.generateFrameNumbers("mario-transform", {
+        frames: [9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+      }),
+      frameRate: 10,
+    });
+  }
+
+  private isTouchingPlayer({ body }: Enemy) {
+    return (
+      body.enable &&
+      Math.abs(this.player.center.x - body.center.x) <=
+        this.player.halfWidth + body.halfWidth &&
+      Math.abs(this.player.center.y - body.center.y) <=
+        this.player.halfHeight + body.halfHeight
+    );
+  }
+
+  private shrinkMario() {
+    this.marioForm = "shrinking";
+    this.player.stop();
+    this.physics.pause();
+    this.time.paused = true;
+    for (const { sprite } of this.enemies) sprite.anims.pause();
+
+    this.mario.once(
+      `${Phaser.Animations.Events.ANIMATION_COMPLETE_KEY}${MARIO_SHRINK_ANIMATION}`,
+      () => this.finishShrinking(),
+    );
+    this.mario.play(MARIO_SHRINK_ANIMATION);
+  }
+
+  private finishShrinking() {
+    this.marioForm = "small";
+    this.mario.setTexture("small-mario", 0).setAlpha(0.35);
+    const hitboxSize = SQUARE_SIZE / PLAYER_SPRITE_SCALE;
+    this.player
+      .setSize(hitboxSize, hitboxSize)
+      .setBoundsRectangle(this.physics.world.bounds)
+      .updateFromGameObject();
+
+    for (const { sprite } of this.enemies) sprite.anims.resume();
+    this.physics.resume();
+    this.time.paused = false;
+    this.invincibilityTimer = this.time.delayedCall(MARIO_INVINCIBILITY, () => {
+      this.invincibilityTimer = undefined;
+      this.mario.setAlpha(1);
+    });
   }
 
   private addEnemy(kind: Enemy["kind"], x: number, y: number): Enemy {
@@ -150,18 +254,14 @@ export default class GameScene extends Phaser.Scene {
     const { body, sprite } = enemy;
     if (!body.enable) return;
 
-    const dx = this.player.center.x - body.center.x;
-    const dy = this.player.center.y - body.center.y;
-
-    if (
-      Math.abs(dx) <= this.player.halfWidth + body.halfWidth &&
-      Math.abs(dy) <= this.player.halfHeight + body.halfHeight
-    ) {
+    if (this.isTouchingPlayer(enemy)) {
       body.stop();
       this.stopEnemyAnimation(enemy);
       return;
     }
 
+    const dx = this.player.center.x - body.center.x;
+    const dy = this.player.center.y - body.center.y;
     this.enemyDirection.set(dx, dy).normalize().scale(ENEMY_SPEED);
     body.setVelocity(this.enemyDirection.x, this.enemyDirection.y);
 
