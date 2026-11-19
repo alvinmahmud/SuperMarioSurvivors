@@ -8,7 +8,7 @@ if (!container) {
 }
 
 createRoot(container).render(
-  <main>
+  <main className="game-page">
     <h1>Super Mario Survivors</h1>
     <PhaserGame />
   </main>,

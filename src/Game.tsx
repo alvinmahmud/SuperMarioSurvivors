@@ -15,6 +15,10 @@ export default function Game() {
       parent,
       width: 640,
       height: 360,
+      scale: {
+        mode: Phaser.Scale.FIT,
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+      },
       backgroundColor: "#202838",
       pixelArt: true,
       physics: {
@@ -69,5 +73,5 @@ export default function Game() {
     };
   }, []);
 
-  return <div ref={containerRef} />;
+  return <div className="game-container" ref={containerRef} />;
 }

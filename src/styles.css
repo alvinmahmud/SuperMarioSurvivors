@@ -1,0 +1,36 @@
+body {
+    margin: 0;
+}
+
+.game-page {
+    box-sizing: border-box;
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 1rem;
+}
+
+.game-page h1 {
+    margin: 0;
+    font-size: clamp(1.5rem, 4vw, 2rem);
+    text-align: center;
+}
+
+.game-container {
+    /* Leave room for the title and allow scrolling on very short windows. */
+    width: min(100%, 72rem, max(12rem, calc((100dvh - 7rem) * 16 / 9)));
+    aspect-ratio: 16 / 9;
+    position: relative;
+}
+
+.game-container canvas {
+    /* Let the container size the canvas, not the other way around. */
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+}
