@@ -9,7 +9,7 @@ if (!container) {
 
 createRoot(container).render(
   <main>
-    <h1>SuperMarioSurvivors</h1>
+    <h1>Super Mario Survivors</h1>
     <PhaserGame />
   </main>,
 );
