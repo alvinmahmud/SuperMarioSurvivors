@@ -3,6 +3,8 @@ import Phaser from "phaser";
 const PLAYER_SPEED = 180;
 const PLAYER_SPRITE_SCALE = 2;
 const MARIO_SHRINK_ANIMATION = "mario-shrink";
+const MARIO_FIRE_TRANSITION = "mario-fire-transition";
+const FIREBALL_ANIMATION = "fireball-spin";
 const MARIO_INVINCIBILITY = 1500;
 const MARIO_BLINK_INTERVAL = 100;
 const ENEMY_SPEED = 55;
@@ -10,10 +12,13 @@ const ENEMY_STEP_INTERVAL = 140;
 const KOOPA_FRAME_DURATION = 150;
 const KOOPA_WALK_ANIMATION = "koopa-walk";
 const SQUARE_SIZE = 32;
-const PROJECTILE_SIZE = 8;
+const FIREBALL_SCALE = 2;
 const PROJECTILE_SPEED = 360;
 const ATTACK_INTERVAL = 5000;
-const RESPAWN_DELAY = 1000;
+const ENEMY_SPAWN_INTERVAL = 2000;
+const MAX_ENEMIES = 10;
+
+type MarioForm = "big" | "fire" | "small";
 
 export type GameScreen = "loading" | "start" | "playing" | "game-over";
 
@@ -30,7 +35,10 @@ export default class GameScene extends Phaser.Scene {
   private runPhase: RunPhase = "waiting";
   private player!: Phaser.Physics.Arcade.Body;
   private mario!: Phaser.GameObjects.Sprite;
-  private marioForm: "big" | "shrinking" | "small" = "big";
+  private marioForm: MarioForm = "big";
+  private transforming = false;
+  private flower?: Phaser.GameObjects.Image;
+  private attackTimer?: Phaser.Time.TimerEvent;
   private invincibilityTimer?: Phaser.Time.TimerEvent;
   private enemies: Enemy[] = [];
   private projectiles!: Phaser.Physics.Arcade.Group;
@@ -43,6 +51,15 @@ export default class GameScene extends Phaser.Scene {
 
   preload() {
     this.load.image("mario-death", "/assets/sprites/mario-death.png");
+    this.load.image("fire-flower", "/assets/sprites/fire-flower.png");
+    this.load.spritesheet("fire-mario", "/assets/sprites/fire-mario.png", {
+      frameWidth: 16,
+      frameHeight: 32,
+    });
+    this.load.spritesheet("fireball", "/assets/sprites/fireball.png", {
+      frameWidth: 8,
+      frameHeight: 8,
+    });
     this.load.spritesheet("big-mario", "/assets/sprites/big-mario.png", {
       frameWidth: 16,
       frameHeight: 32,
@@ -70,6 +87,8 @@ export default class GameScene extends Phaser.Scene {
     this.runPhase = "waiting";
     this.createMarioAnimations();
     this.marioForm = "big";
+    this.transforming = false;
+    this.attackTimer = undefined;
     this.invincibilityTimer = undefined;
 
     const { width, height } = this.scale;
@@ -105,14 +124,12 @@ export default class GameScene extends Phaser.Scene {
     }
 
     this.projectiles = this.physics.add.group();
-    this.enemies = [
-      this.addEnemy("goomba", 64, 64),
-      this.addEnemy("koopa", this.scale.width - 64, 64),
-    ];
+    this.enemies = [];
+    this.spawnFlower();
     this.time.addEvent({
-      delay: ATTACK_INTERVAL,
+      delay: ENEMY_SPAWN_INTERVAL,
       loop: true,
-      callback: () => this.fireProjectile(),
+      callback: () => this.spawnEnemy(),
     });
 
     this.bindPlayerControls(mario);
@@ -172,15 +189,22 @@ export default class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number) {
-    if (this.runPhase !== "running" || this.marioForm === "shrinking") return;
+    if (this.runPhase !== "running" || this.transforming) return;
 
     const grace = this.invincibilityTimer;
     if (!grace && this.enemies.some((enemy) => this.isTouchingPlayer(enemy))) {
-      if (this.marioForm === "big") {
-        this.shrinkMario();
-      } else {
+      if (this.marioForm === "small") {
         this.playMarioDeath();
+      } else {
+        this.transformMario(this.marioForm === "fire" ? "big" : "small", true);
       }
+      return;
+    }
+
+    if (this.flower && this.marioForm === "big" && this.isTouchingFlower()) {
+      this.flower.destroy();
+      this.flower = undefined;
+      this.transformMario("fire", false);
       return;
     }
     if (grace) {
@@ -200,6 +224,7 @@ export default class GameScene extends Phaser.Scene {
   private createMarioAnimations() {
     for (const [texture, duration] of [
       ["big-mario", 450],
+      ["fire-mario", 450],
       ["small-mario", 300],
     ] as const) {
       const key = `${texture}-walk`;
@@ -212,6 +237,27 @@ export default class GameScene extends Phaser.Scene {
       });
     }
 
+    if (!this.anims.exists(MARIO_FIRE_TRANSITION)) {
+      this.anims.create({
+        key: MARIO_FIRE_TRANSITION,
+        frames: Array.from({ length: 8 }, (_, i) => ({
+          key: i % 2 === 0 ? "big-mario" : "fire-mario",
+          frame: 0,
+        })),
+        frameRate: 10,
+      });
+    }
+    if (!this.anims.exists(FIREBALL_ANIMATION)) {
+      this.anims.create({
+        key: FIREBALL_ANIMATION,
+        frames: this.anims.generateFrameNumbers("fireball", {
+          start: 0,
+          end: 3,
+        }),
+        frameRate: 25,
+        repeat: -1,
+      });
+    }
     if (this.anims.exists(MARIO_SHRINK_ANIMATION)) return;
     this.anims.create({
       key: MARIO_SHRINK_ANIMATION,
@@ -232,31 +278,89 @@ export default class GameScene extends Phaser.Scene {
     );
   }
 
-  private shrinkMario() {
-    this.marioForm = "shrinking";
+  private transformMario(form: MarioForm, fromHit: boolean) {
+    this.transforming = true;
     this.freezeGameplay();
+    if (this.marioForm === "fire") {
+      this.attackTimer?.remove();
+      this.attackTimer = undefined;
+    }
 
+    const animation =
+      form === "small" ? MARIO_SHRINK_ANIMATION : MARIO_FIRE_TRANSITION;
     this.mario.once(
-      `${Phaser.Animations.Events.ANIMATION_COMPLETE_KEY}${MARIO_SHRINK_ANIMATION}`,
-      () => this.finishShrinking(),
+      `${Phaser.Animations.Events.ANIMATION_COMPLETE_KEY}${animation}`,
+      () => this.finishTransformation(form, fromHit),
     );
-    this.mario.play(MARIO_SHRINK_ANIMATION);
+    if (form === "big") {
+      this.mario.playReverse(animation);
+    } else {
+      this.mario.play(animation);
+    }
   }
 
-  private finishShrinking() {
-    this.marioForm = "small";
-    this.mario.setTexture("small-mario", 0).setAlpha(0.35);
-    const hitboxSize = SQUARE_SIZE / PLAYER_SPRITE_SCALE;
-    this.player
-      .setSize(hitboxSize, hitboxSize)
-      .setBoundsRectangle(this.physics.world.bounds)
-      .updateFromGameObject();
+  private finishTransformation(form: MarioForm, fromHit: boolean) {
+    this.marioForm = form;
+    this.transforming = false;
+    this.mario.setTexture(`${form}-mario`, 0).setAlpha(fromHit ? 0.35 : 1);
+    if (form === "small") {
+      const hitboxSize = SQUARE_SIZE / PLAYER_SPRITE_SCALE;
+      this.player
+        .setSize(hitboxSize, hitboxSize)
+        .setBoundsRectangle(this.physics.world.bounds)
+        .updateFromGameObject();
+    }
 
     this.resumeGameplay();
-    this.invincibilityTimer = this.time.delayedCall(MARIO_INVINCIBILITY, () => {
-      this.invincibilityTimer = undefined;
-      this.mario.setAlpha(1);
+    if (fromHit) {
+      this.invincibilityTimer = this.time.delayedCall(
+        MARIO_INVINCIBILITY,
+        () => {
+          this.invincibilityTimer = undefined;
+          this.mario.setAlpha(1);
+        },
+      );
+    } else {
+      this.startFireAttack();
+    }
+  }
+
+  private startFireAttack() {
+    if (this.marioForm !== "fire" || this.attackTimer || !this.enemies.length)
+      return;
+
+    this.fireProjectile();
+    this.attackTimer = this.time.addEvent({
+      delay: ATTACK_INTERVAL,
+      loop: true,
+      callback: () => this.fireProjectile(),
     });
+  }
+
+  private spawnFlower() {
+    const { width, height } = this.scale;
+    const margin = SQUARE_SIZE;
+    let x: number;
+    let y: number;
+    do {
+      x = Phaser.Math.Between(margin, width - margin);
+      y = Phaser.Math.Between(margin, height - margin);
+    } while (
+      Phaser.Math.Distance.Squared(x, y, width / 2, height / 2) <
+      80 ** 2
+    );
+    this.flower = this.add.image(x, y, "fire-flower").setScale(2);
+  }
+
+  private isTouchingFlower() {
+    const flower = this.flower;
+    return (
+      flower &&
+      Math.abs(this.player.center.x - flower.x) <=
+        this.player.halfWidth + flower.displayWidth / 2 &&
+      Math.abs(this.player.center.y - flower.y) <=
+        this.player.halfHeight + flower.displayHeight / 2
+    );
   }
 
   private freezeGameplay() {
@@ -264,10 +368,18 @@ export default class GameScene extends Phaser.Scene {
     this.physics.pause();
     this.time.paused = true;
     for (const { sprite } of this.enemies) sprite.anims.pause();
+    for (const projectile of this.projectiles.getChildren()) {
+      if (projectile instanceof Phaser.GameObjects.Sprite)
+        projectile.anims.pause();
+    }
   }
 
   private resumeGameplay() {
     for (const { sprite } of this.enemies) sprite.anims.resume();
+    for (const projectile of this.projectiles.getChildren()) {
+      if (projectile instanceof Phaser.GameObjects.Sprite)
+        projectile.anims.resume();
+    }
     this.physics.resume();
     this.time.paused = false;
   }
@@ -296,6 +408,23 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
+  private spawnEnemy() {
+    if (this.enemies.length >= MAX_ENEMIES) return;
+
+    const { width, height } = this.scale;
+    const margin = SQUARE_SIZE;
+    const x = Phaser.Math.Between(margin, width - margin);
+    const y = Phaser.Math.Between(margin, height - margin);
+    const { x: playerX, y: playerY } = this.player.center;
+    const [spawnX, spawnY] = Phaser.Utils.Array.GetRandom([
+      [playerX < width / 2 ? width - margin : margin, y],
+      [x, playerY < height / 2 ? height - margin : margin],
+    ]);
+    const kind = Phaser.Math.Between(0, 1) === 0 ? "goomba" : "koopa";
+    this.enemies.push(this.addEnemy(kind, spawnX, spawnY));
+    this.startFireAttack();
+  }
+
   private addEnemy(kind: Enemy["kind"], x: number, y: number): Enemy {
     const sprite = this.add.sprite(x, y, kind).setScale(2);
     this.physics.add.existing(sprite);
@@ -309,10 +438,19 @@ export default class GameScene extends Phaser.Scene {
       body: sprite.body.setCollideWorldBounds(true),
       walkTime: 0,
     };
-    this.physics.add.overlap(sprite, this.projectiles, (_enemy, projectile) => {
-      if (!(projectile instanceof Phaser.GameObjects.Rectangle)) return;
-      this.hitEnemy(enemy, projectile);
-    });
+    const overlap = this.physics.add.overlap(
+      sprite,
+      this.projectiles,
+      (_enemy, projectile) => {
+        if (
+          !enemy.body.enable ||
+          !(projectile instanceof Phaser.GameObjects.Sprite)
+        )
+          return;
+        overlap.destroy();
+        this.hitEnemy(enemy, projectile);
+      },
+    );
     return enemy;
   }
 
@@ -350,6 +488,8 @@ export default class GameScene extends Phaser.Scene {
   }
 
   private fireProjectile() {
+    if (this.marioForm !== "fire" || this.transforming) return;
+
     const { x, y } = this.player.center;
     let target: Enemy | undefined;
     let closestDistance = Infinity;
@@ -365,49 +505,36 @@ export default class GameScene extends Phaser.Scene {
     }
     if (!target) return;
 
-    const { shape } = this.addSquare(x, y, PROJECTILE_SIZE, 0xffdd55);
-    this.projectiles.add(shape);
+    const fireball = this.add
+      .sprite(x, y, "fireball", 0)
+      .setScale(FIREBALL_SCALE);
+    this.projectiles.add(fireball);
+    fireball.play(FIREBALL_ANIMATION);
     this.physics.moveTo(
-      shape,
+      fireball,
       target.body.center.x,
       target.body.center.y,
       PROJECTILE_SPEED,
     );
   }
 
-  private hitEnemy(enemy: Enemy, projectile: Phaser.GameObjects.Rectangle) {
-    if (!enemy.body.enable) return;
-
+  private hitEnemy(enemy: Enemy, projectile: Phaser.GameObjects.Sprite) {
     projectile.destroy();
-    enemy.body.stop();
     enemy.body.enable = false;
-    this.stopEnemyAnimation(enemy);
-    enemy.sprite.setVisible(false);
-    this.time.delayedCall(RESPAWN_DELAY, () => this.respawnEnemy(enemy));
-  }
-
-  private respawnEnemy(enemy: Enemy) {
-    const { width, height } = this.scale;
-    const { x, y } = this.player.center;
-    const spawnX = x < width / 2 ? width - SQUARE_SIZE : SQUARE_SIZE;
-    const oppositeY = y < height / 2 ? height - SQUARE_SIZE : SQUARE_SIZE;
-    const spawnY = enemy.kind === "goomba" ? oppositeY : height - oppositeY;
-
-    enemy.body.reset(spawnX, spawnY);
-    enemy.body.enable = true;
-    enemy.sprite.setFlipX(false).setVisible(true);
+    enemy.sprite.destroy();
+    this.enemies.splice(this.enemies.indexOf(enemy), 1);
   }
 
   private clearOffscreenProjectiles() {
     const { width, height } = this.scale;
-    const margin = PROJECTILE_SIZE / 2;
     const projectiles = this.projectiles.getChildren();
 
     for (let i = projectiles.length - 1; i >= 0; i--) {
       const projectile = projectiles[i];
-      if (!(projectile instanceof Phaser.GameObjects.Rectangle)) continue;
+      if (!(projectile instanceof Phaser.GameObjects.Sprite)) continue;
 
       const { x, y } = projectile;
+      const margin = projectile.displayWidth / 2;
       if (
         x < -margin ||
         x > width + margin ||
@@ -417,16 +544,5 @@ export default class GameScene extends Phaser.Scene {
         projectile.destroy();
       }
     }
-  }
-
-  private addSquare(x: number, y: number, size: number, color: number) {
-    const square = this.add.rectangle(x, y, size, size, color);
-    this.physics.add.existing(square);
-
-    if (!(square.body instanceof Phaser.Physics.Arcade.Body)) {
-      throw new Error("Could not create an Arcade Physics body for the square");
-    }
-
-    return { shape: square, body: square.body };
   }
 }
