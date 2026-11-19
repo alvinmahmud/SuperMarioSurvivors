@@ -26,9 +26,35 @@ body {
     position: relative;
 }
 
-.game-container canvas {
+.game-surface {
+    position: absolute;
+    inset: 0;
+}
+
+.game-surface canvas {
     position: absolute;
     top: 0;
     left: 0;
     display: block;
+}
+
+.game-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    background: rgb(0 0 0 / 60%);
+}
+
+.game-overlay button {
+    padding: 0.65rem 1.25rem;
+    font:
+        600 1rem system-ui,
+        sans-serif;
+    cursor: pointer;
+}
+
+.game-overlay button:disabled {
+    cursor: wait;
 }

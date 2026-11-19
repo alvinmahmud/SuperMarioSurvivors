@@ -15,6 +15,10 @@ const PROJECTILE_SPEED = 360;
 const ATTACK_INTERVAL = 5000;
 const RESPAWN_DELAY = 1000;
 
+export type GameScreen = "loading" | "start" | "playing" | "game-over";
+
+type RunPhase = "waiting" | "running" | "dying" | "game-over" | "restarting";
+
 type Enemy = {
   kind: "goomba" | "koopa";
   sprite: Phaser.GameObjects.Sprite;
@@ -23,6 +27,7 @@ type Enemy = {
 };
 
 export default class GameScene extends Phaser.Scene {
+  private runPhase: RunPhase = "waiting";
   private player!: Phaser.Physics.Arcade.Body;
   private mario!: Phaser.GameObjects.Sprite;
   private marioForm: "big" | "shrinking" | "small" = "big";
@@ -32,7 +37,12 @@ export default class GameScene extends Phaser.Scene {
   private movePlayer?: () => void;
   private enemyDirection = new Phaser.Math.Vector2();
 
+  constructor(private readonly onScreenChange: (screen: GameScreen) => void) {
+    super("GameScene");
+  }
+
   preload() {
+    this.load.image("mario-death", "/assets/sprites/mario-death.png");
     this.load.spritesheet("big-mario", "/assets/sprites/big-mario.png", {
       frameWidth: 16,
       frameHeight: 32,
@@ -56,7 +66,8 @@ export default class GameScene extends Phaser.Scene {
     });
   }
 
-  create() {
+  create(data: { autoStart?: boolean } = {}) {
+    this.runPhase = "waiting";
     this.createMarioAnimations();
     this.marioForm = "big";
     this.invincibilityTimer = undefined;
@@ -104,6 +115,28 @@ export default class GameScene extends Phaser.Scene {
       callback: () => this.fireProjectile(),
     });
 
+    this.bindPlayerControls(mario);
+    if (data.autoStart) {
+      this.startRun();
+    } else {
+      this.freezeGameplay();
+      this.onScreenChange("start");
+    }
+  }
+
+  startRun() {
+    if (this.runPhase === "waiting") {
+      this.runPhase = "running";
+      this.resumeGameplay();
+      this.onScreenChange("playing");
+    } else if (this.runPhase === "game-over") {
+      this.runPhase = "restarting";
+      this.scene.restart({ autoStart: true });
+    }
+  }
+
+  private bindPlayerControls(mario: Phaser.GameObjects.Sprite) {
+    this.movePlayer = undefined;
     const keyboard = this.input.keyboard;
     if (!keyboard) return;
 
@@ -113,6 +146,7 @@ export default class GameScene extends Phaser.Scene {
     const down = keyboard.addKey(S);
     const right = keyboard.addKey(D);
     const arrows = keyboard.createCursorKeys();
+    keyboard.removeCapture(Phaser.Input.Keyboard.KeyCodes.SPACE);
     const direction = new Phaser.Math.Vector2();
 
     this.movePlayer = () => {
@@ -138,17 +172,17 @@ export default class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number) {
-    if (this.marioForm === "shrinking") return;
-
-    if (
-      this.marioForm === "big" &&
-      this.enemies.some((enemy) => this.isTouchingPlayer(enemy))
-    ) {
-      this.shrinkMario();
-      return;
-    }
+    if (this.runPhase !== "running" || this.marioForm === "shrinking") return;
 
     const grace = this.invincibilityTimer;
+    if (!grace && this.enemies.some((enemy) => this.isTouchingPlayer(enemy))) {
+      if (this.marioForm === "big") {
+        this.shrinkMario();
+      } else {
+        this.playMarioDeath();
+      }
+      return;
+    }
     if (grace) {
       const blink = Math.floor(grace.getElapsed() / MARIO_BLINK_INTERVAL) % 2;
       this.mario.setAlpha(blink === 0 ? 0.35 : 1);
@@ -200,10 +234,7 @@ export default class GameScene extends Phaser.Scene {
 
   private shrinkMario() {
     this.marioForm = "shrinking";
-    this.player.stop();
-    this.physics.pause();
-    this.time.paused = true;
-    for (const { sprite } of this.enemies) sprite.anims.pause();
+    this.freezeGameplay();
 
     this.mario.once(
       `${Phaser.Animations.Events.ANIMATION_COMPLETE_KEY}${MARIO_SHRINK_ANIMATION}`,
@@ -221,12 +252,47 @@ export default class GameScene extends Phaser.Scene {
       .setBoundsRectangle(this.physics.world.bounds)
       .updateFromGameObject();
 
-    for (const { sprite } of this.enemies) sprite.anims.resume();
-    this.physics.resume();
-    this.time.paused = false;
+    this.resumeGameplay();
     this.invincibilityTimer = this.time.delayedCall(MARIO_INVINCIBILITY, () => {
       this.invincibilityTimer = undefined;
       this.mario.setAlpha(1);
+    });
+  }
+
+  private freezeGameplay() {
+    this.player.stop();
+    this.physics.pause();
+    this.time.paused = true;
+    for (const { sprite } of this.enemies) sprite.anims.pause();
+  }
+
+  private resumeGameplay() {
+    for (const { sprite } of this.enemies) sprite.anims.resume();
+    this.physics.resume();
+    this.time.paused = false;
+  }
+
+  private playMarioDeath() {
+    this.runPhase = "dying";
+    this.freezeGameplay();
+    this.player.enable = false;
+    const mario = this.mario;
+    mario.stop().setTexture("mario-death").setFlipX(false).setDepth(1);
+
+    this.tweens.chain({
+      targets: mario,
+      tweens: [
+        { y: mario.y - 56, duration: 250, ease: "Quad.Out" },
+        {
+          y: this.scale.height + mario.displayHeight,
+          duration: 750,
+          ease: "Quad.In",
+        },
+      ],
+      onComplete: () => {
+        this.runPhase = "game-over";
+        this.onScreenChange("game-over");
+      },
     });
   }
 
