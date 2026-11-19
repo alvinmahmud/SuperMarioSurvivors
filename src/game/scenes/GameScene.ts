@@ -133,7 +133,9 @@ export default class GameScene extends Phaser.Scene {
     const { width, height } = this.scale;
     const mario = this.add
       .sprite(width / 2, height / 2, "big-mario", 0)
-      .setScale(PLAYER_SPRITE_SCALE);
+      .setScale(PLAYER_SPRITE_SCALE)
+      .setOrigin(0.5, 1);
+    mario.y += mario.displayHeight / 2;
     this.physics.add.existing(mario);
     if (!(mario.body instanceof Phaser.Physics.Arcade.Body)) {
       throw new Error("Could not create an Arcade Physics body for Mario");
