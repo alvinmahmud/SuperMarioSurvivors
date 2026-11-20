@@ -1,21 +1,20 @@
 import Phaser from "phaser";
 import Enemy from "../Enemy";
 import { ENEMY_KINDS, ENEMY_STATS, type EnemyKind } from "../enemyStats";
+import { ENTITY_SCALE, enemyCapAt } from "../gameConfig";
 
 const PLAYER_SPEED = 180;
-const PLAYER_SPRITE_SCALE = 2;
+
 const MARIO_SHRINK_ANIMATION = "mario-shrink";
 const MARIO_FIRE_TRANSITION = "mario-fire-transition";
 const FIREBALL_ANIMATION = "fireball-spin";
 const MARIO_INVINCIBILITY = 1500;
 const MARIO_BLINK_INTERVAL = 100;
 
-const SQUARE_SIZE = 32;
-const FIREBALL_SCALE = 2;
+const SPAWN_MARGIN = 32;
 const PROJECTILE_SPEED = 360;
 const ATTACK_INTERVAL = 1000;
 const ENEMY_SPAWN_INTERVAL = 1000;
-const MAX_ENEMIES = 5;
 
 type MarioForm = "big" | "fire" | "small";
 
@@ -31,6 +30,7 @@ export default class GameScene extends Phaser.Scene {
   private transforming = false;
   private pickup?: Phaser.GameObjects.Image;
   private defeated = 0;
+  private elapsedSeconds = 0;
   private attackTimer?: Phaser.Time.TimerEvent;
   private invincibilityTimer?: Phaser.Time.TimerEvent;
   private playerHit = false;
@@ -97,7 +97,8 @@ export default class GameScene extends Phaser.Scene {
     this.transforming = false;
     this.defeated = 0;
     this.onDefeatedChange(this.defeated);
-    this.onElapsedChange(0);
+    this.elapsedSeconds = 0;
+    this.onElapsedChange(this.elapsedSeconds);
     this.pickup = undefined;
     this.attackTimer = undefined;
     this.invincibilityTimer = undefined;
@@ -106,7 +107,7 @@ export default class GameScene extends Phaser.Scene {
     const { width, height } = this.scale;
     const mario = this.add
       .sprite(width / 2, height / 2, "big-mario", 0)
-      .setScale(PLAYER_SPRITE_SCALE)
+      .setScale(ENTITY_SCALE)
       .setOrigin(0.5, 1);
     mario.y += mario.displayHeight / 2;
     this.physics.add.existing(mario);
@@ -182,11 +183,10 @@ export default class GameScene extends Phaser.Scene {
   startRun() {
     if (this.runPhase === "waiting") {
       this.runPhase = "running";
-      let elapsedSeconds = 0;
       this.time.addEvent({
         delay: 1000,
         loop: true,
-        callback: () => this.onElapsedChange(++elapsedSeconds),
+        callback: () => this.onElapsedChange(++this.elapsedSeconds),
       });
       this.resumeGameplay();
       this.onScreenChange("playing");
@@ -408,7 +408,8 @@ export default class GameScene extends Phaser.Scene {
     this.pickup?.destroy();
     const { width, height } = this.scale;
     const { x: playerX, y: playerY } = this.player.center;
-    const margin = SQUARE_SIZE;
+    const margin = SPAWN_MARGIN;
+    const frame = this.textures.getFrame(texture);
     const verticalMargin = texture === "super-mushroom" ? 2 * margin : margin;
     let x: number;
     let y: number;
@@ -418,10 +419,16 @@ export default class GameScene extends Phaser.Scene {
     } while (
       Phaser.Math.Distance.Squared(x, y, playerX, playerY) < 80 ** 2 ||
       this.enemies.some(({ body }) =>
-        this.overlapsSpawn(body, x, y, margin, margin),
+        this.overlapsSpawn(
+          body,
+          x,
+          y,
+          frame.realWidth * ENTITY_SCALE,
+          frame.realHeight * ENTITY_SCALE,
+        ),
       )
     );
-    this.pickup = this.add.image(x, y, texture).setScale(2);
+    this.pickup = this.add.image(x, y, texture).setScale(ENTITY_SCALE);
   }
 
   private isTouchingPickup(pickup: Phaser.GameObjects.Image) {
@@ -479,16 +486,17 @@ export default class GameScene extends Phaser.Scene {
   }
 
   private spawnEnemy() {
-    if (this.enemies.length >= MAX_ENEMIES) return;
+    if (this.enemies.length >= enemyCapAt(this.elapsedSeconds)) return;
 
     const { width, height } = this.scale;
-    const margin = SQUARE_SIZE;
+    const margin = SPAWN_MARGIN;
     const { x: playerX, y: playerY } = this.player.center;
     const kind = Phaser.Utils.Array.GetRandom(ENEMY_KINDS);
     const frame = this.textures.getFrame(kind);
     if (ENEMY_STATS[kind].movement === "straight") {
       const heading = Phaser.Math.Between(0, 1) === 0 ? 1 : -1;
-      const x = heading === 1 ? -frame.realWidth : width + frame.realWidth;
+      const halfWidth = (frame.realWidth * ENTITY_SCALE) / 2;
+      const x = heading === 1 ? -halfWidth : width + halfWidth;
       const y = Phaser.Math.Between(margin, height - margin);
       this.addEnemy(kind, x, y, heading);
       return;
@@ -510,8 +518,8 @@ export default class GameScene extends Phaser.Scene {
           body,
           x,
           y,
-          frame.realWidth * 2,
-          frame.realHeight * 2,
+          frame.realWidth * ENTITY_SCALE,
+          frame.realHeight * ENTITY_SCALE,
         );
       if (
         overlaps(this.player) ||
@@ -574,7 +582,7 @@ export default class GameScene extends Phaser.Scene {
 
     const fireball = this.add
       .sprite(x, y, "fireball", 0)
-      .setScale(FIREBALL_SCALE);
+      .setScale(ENTITY_SCALE);
     this.projectiles.add(fireball);
     fireball.play(FIREBALL_ANIMATION);
     this.physics.moveTo(

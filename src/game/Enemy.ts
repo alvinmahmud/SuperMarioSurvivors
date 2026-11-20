@@ -6,10 +6,10 @@ import {
   type EnemyStats,
 } from "./enemyStats";
 
-const SPRITE_SCALE = 2;
+import { ENTITY_SCALE } from "./gameConfig";
 const STEP_INTERVAL = 140;
-const SPACING = 8;
-const BAR_WIDTH = 26;
+const SPACING = 7;
+const BAR_WIDTH = 23;
 const BAR_HEIGHT = 3;
 const BAR_GAP = 3;
 
@@ -56,7 +56,7 @@ export default class Enemy extends Phaser.GameObjects.Sprite {
     super(scene, x, y, kind);
     this.stats = ENEMY_STATS[kind];
     this.hp = this.stats.maxHp;
-    this.setScale(SPRITE_SCALE);
+    this.setScale(ENTITY_SCALE);
     scene.add.existing(this);
     group.add(this);
     if (this.isStraight) {
