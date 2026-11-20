@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import Enemy from "../Enemy";
 import { ENEMY_KINDS, ENEMY_STATS, type EnemyKind } from "../enemyStats";
 
 const PLAYER_SPEED = 180;
@@ -9,11 +10,6 @@ const FIREBALL_ANIMATION = "fireball-spin";
 const MARIO_INVINCIBILITY = 1500;
 const MARIO_BLINK_INTERVAL = 100;
 
-const ENEMY_STEP_INTERVAL = 140;
-const KOOPA_FRAME_DURATION = 150;
-const RED_PARATROOPA_FRAME_DURATION = 200;
-const KOOPA_KINDS = ENEMY_KINDS.filter((kind) => kind !== "goomba");
-
 const SQUARE_SIZE = 32;
 const FIREBALL_SCALE = 2;
 const PROJECTILE_SPEED = 360;
@@ -21,29 +17,11 @@ const ATTACK_INTERVAL = 1000;
 const ENEMY_SPAWN_INTERVAL = 1000;
 const MAX_ENEMIES = 5;
 
-const HEALTH_BAR_WIDTH = 26;
-const HEALTH_BAR_HEIGHT = 3;
-const HEALTH_BAR_GAP = 3;
-const KNOCKBACK_SPEED = 95;
-const KNOCKBACK_DURATION = 90;
-const ENEMY_SPACING = 8;
-
 type MarioForm = "big" | "fire" | "small";
 
 export type GameScreen = "loading" | "start" | "playing" | "game-over";
 
 type RunPhase = "waiting" | "running" | "dying" | "game-over" | "restarting";
-
-type Enemy = {
-  kind: EnemyKind;
-  sprite: Phaser.GameObjects.Sprite;
-  body: Phaser.Physics.Arcade.Body;
-  healthBar: Phaser.GameObjects.Graphics;
-  hp: number;
-  maxHp: number;
-  knockbackRemaining: number;
-  walkTime: number;
-};
 
 export default class GameScene extends Phaser.Scene {
   private runPhase: RunPhase = "waiting";
@@ -61,7 +39,6 @@ export default class GameScene extends Phaser.Scene {
 
   private projectiles!: Phaser.Physics.Arcade.Group;
   private movePlayer?: () => void;
-  private enemyDirection = new Phaser.Math.Vector2();
 
   constructor(
     private readonly onScreenChange: (screen: GameScreen) => void,
@@ -110,13 +87,7 @@ export default class GameScene extends Phaser.Scene {
         frameHeight: 16,
       },
     );
-    this.load.image("goomba", "/assets/sprites/enemies/goomba.png");
-    for (const kind of KOOPA_KINDS) {
-      this.load.spritesheet(kind, `/assets/sprites/enemies/${kind}.png`, {
-        frameWidth: 16,
-        frameHeight: 24,
-      });
-    }
+    Enemy.preload(this);
   }
 
   create(data: { autoStart?: boolean } = {}) {
@@ -146,24 +117,43 @@ export default class GameScene extends Phaser.Scene {
     this.mario = mario;
     this.player = mario.body.setCollideWorldBounds(true);
     this.updatePlayerBounds();
-    for (const kind of KOOPA_KINDS) {
-      const key = `${kind}-walk`;
-      if (this.anims.exists(key)) continue;
-      this.anims.create({
-        key,
-        frames: this.anims.generateFrameNumbers(kind, { start: 0, end: 1 }),
-        duration:
-          2 *
-          (kind === "red-paratroopa"
-            ? RED_PARATROOPA_FRAME_DURATION
-            : KOOPA_FRAME_DURATION),
-        repeat: -1,
-      });
-    }
+    Enemy.createAnimations(this);
 
     this.projectiles = this.physics.add.group();
     this.enemyBodies = this.physics.add.group();
-    this.physics.add.collider(this.enemyBodies, this.enemyBodies);
+    this.physics.add.collider(
+      this.enemyBodies,
+      this.enemyBodies,
+      undefined,
+      (a, b) =>
+        a instanceof Enemy &&
+        b instanceof Enemy &&
+        !a.isStraight &&
+        !b.isStraight,
+    );
+    this.physics.add.overlap(
+      this.enemyBodies,
+      this.projectiles,
+      (enemy, projectile) => {
+        if (
+          !(enemy instanceof Enemy) ||
+          !enemy.body.enable ||
+          !(projectile instanceof Phaser.GameObjects.Sprite)
+        )
+          return;
+        const body = projectile.body;
+        const defeated = enemy.takeHit(
+          body instanceof Phaser.Physics.Arcade.Body
+            ? body.velocity
+            : undefined,
+        );
+        projectile.destroy();
+        if (defeated) {
+          this.removeEnemy(enemy);
+          this.onDefeatedChange(++this.defeated);
+        }
+      },
+    );
     this.physics.add.collider(
       mario,
       this.enemyBodies,
@@ -243,7 +233,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number) {
-    for (const enemy of this.enemies) this.positionHealthBar(enemy);
+    for (const enemy of this.enemies) enemy.positionHealthBar();
     if (this.runPhase !== "running" || this.transforming) return;
 
     const grace = this.invincibilityTimer;
@@ -276,9 +266,20 @@ export default class GameScene extends Phaser.Scene {
     this.movePlayer?.();
 
     this.clearOffscreenProjectiles();
+    this.startFireAttack();
 
-    for (const enemy of this.enemies) {
-      this.updateEnemy(enemy, delta);
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const enemy = this.enemies[i];
+      if (enemy.hasExited(this.scale.width)) {
+        this.removeEnemy(enemy);
+      } else {
+        enemy.move(
+          delta,
+          this.player.center,
+          !grace && this.isTouchingPlayer(enemy),
+          this.enemies,
+        );
+      }
     }
   }
 
@@ -388,10 +389,8 @@ export default class GameScene extends Phaser.Scene {
   }
 
   private startFireAttack() {
-    if (this.marioForm !== "fire" || this.attackTimer || !this.enemies.length)
+    if (this.marioForm !== "fire" || this.attackTimer || !this.fireProjectile())
       return;
-
-    this.fireProjectile();
     this.attackTimer = this.time.addEvent({
       delay: ATTACK_INTERVAL,
       loop: true,
@@ -438,7 +437,7 @@ export default class GameScene extends Phaser.Scene {
     this.player.stop();
     this.physics.pause();
     this.time.paused = true;
-    for (const { sprite } of this.enemies) sprite.anims.pause();
+    for (const enemy of this.enemies) enemy.anims.pause();
     for (const projectile of this.projectiles.getChildren()) {
       if (projectile instanceof Phaser.GameObjects.Sprite)
         projectile.anims.pause();
@@ -446,7 +445,7 @@ export default class GameScene extends Phaser.Scene {
   }
 
   private resumeGameplay() {
-    for (const { sprite } of this.enemies) sprite.anims.resume();
+    for (const enemy of this.enemies) enemy.anims.resume();
     for (const projectile of this.projectiles.getChildren()) {
       if (projectile instanceof Phaser.GameObjects.Sprite)
         projectile.anims.resume();
@@ -487,6 +486,13 @@ export default class GameScene extends Phaser.Scene {
     const { x: playerX, y: playerY } = this.player.center;
     const kind = Phaser.Utils.Array.GetRandom(ENEMY_KINDS);
     const frame = this.textures.getFrame(kind);
+    if (ENEMY_STATS[kind].movement === "straight") {
+      const heading = Phaser.Math.Between(0, 1) === 0 ? 1 : -1;
+      const x = heading === 1 ? -frame.realWidth : width + frame.realWidth;
+      const y = Phaser.Math.Between(margin, height - margin);
+      this.addEnemy(kind, x, y, heading);
+      return;
+    }
 
     for (let attempt = 0; attempt < 8; attempt++) {
       const [x, y] = Phaser.Utils.Array.GetRandom([
@@ -513,8 +519,7 @@ export default class GameScene extends Phaser.Scene {
       )
         continue;
 
-      this.enemies.push(this.addEnemy(kind, x, y));
-      this.startFireAttack();
+      this.addEnemy(kind, x, y);
       return;
     }
   }
@@ -532,117 +537,32 @@ export default class GameScene extends Phaser.Scene {
     );
   }
 
-  private addEnemy(kind: Enemy["kind"], x: number, y: number): Enemy {
-    const sprite = this.add.sprite(x, y, kind).setScale(2);
-    this.enemyBodies.add(sprite);
-    if (!(sprite.body instanceof Phaser.Physics.Arcade.Body)) {
-      throw new Error(`Could not create an Arcade Physics body for ${kind}`);
-    }
-
-    const { maxHp } = ENEMY_STATS[kind];
-    const enemy: Enemy = {
-      kind,
-      sprite,
-      body: sprite.body.setCollideWorldBounds(true),
-      healthBar: this.add.graphics().setDepth(1),
-      hp: maxHp,
-      maxHp,
-      knockbackRemaining: 0,
-      walkTime: 0,
-    };
-    this.drawHealthBar(enemy);
-    this.positionHealthBar(enemy);
-    const overlap = this.physics.add.overlap(
-      sprite,
-      this.projectiles,
-      (_enemy, projectile) => {
-        if (
-          !enemy.body.enable ||
-          !(projectile instanceof Phaser.GameObjects.Sprite)
-        )
-          return;
-        this.hitEnemy(enemy, projectile);
-        if (enemy.hp === 0) overlap.destroy();
-      },
-    );
+  private addEnemy(kind: EnemyKind, x: number, y: number, heading?: -1 | 1) {
+    const enemy = new Enemy(this, this.enemyBodies, kind, x, y, heading);
+    this.enemies.push(enemy);
     return enemy;
   }
 
-  private updateEnemy(enemy: Enemy, delta: number) {
-    const { body, sprite } = enemy;
-    if (!body.enable) return;
-
-    if (enemy.knockbackRemaining > 0) {
-      enemy.knockbackRemaining -= delta;
-      return;
-    }
-
-    if (!this.invincibilityTimer && this.isTouchingPlayer(enemy)) {
-      body.stop();
-      this.stopEnemyAnimation(enemy);
-      return;
-    }
-
-    const dx = this.player.center.x - body.center.x;
-    const dy = this.player.center.y - body.center.y;
-    this.enemyDirection.set(dx, dy).normalize();
-    this.addEnemySpacing(enemy);
-    this.enemyDirection.limit(1).scale(ENEMY_STATS[enemy.kind].speed);
-    body.setVelocity(this.enemyDirection.x, this.enemyDirection.y);
-
-    if (enemy.kind !== "goomba") {
-      if (body.velocity.x !== 0) sprite.setFlipX(body.velocity.x > 0);
-      sprite.play(`${enemy.kind}-walk`, true);
-    } else {
-      enemy.walkTime = (enemy.walkTime + delta) % (2 * ENEMY_STEP_INTERVAL);
-      sprite.setFlipX(enemy.walkTime >= ENEMY_STEP_INTERVAL);
-    }
-  }
-
-  private addEnemySpacing(enemy: Enemy) {
-    const { body } = enemy;
-    const index = this.enemies.indexOf(enemy);
-
-    for (const [otherIndex, other] of this.enemies.entries()) {
-      if (other === enemy || !other.body.enable) continue;
-
-      const dx = body.center.x - other.body.center.x;
-      const dy = body.center.y - other.body.center.y;
-      const spacingX =
-        body.halfWidth + other.body.halfWidth + ENEMY_SPACING - Math.abs(dx);
-      const spacingY =
-        body.halfHeight + other.body.halfHeight + ENEMY_SPACING - Math.abs(dy);
-      if (spacingX <= 0 || spacingY <= 0) continue;
-
-      const fallback = index < otherIndex ? -1 : 1;
-      if (spacingX <= spacingY) {
-        this.enemyDirection.x +=
-          (Math.sign(dx) || fallback) * Math.min(2, spacingX / ENEMY_SPACING);
-      } else {
-        this.enemyDirection.y +=
-          (Math.sign(dy) || fallback) * Math.min(2, spacingY / ENEMY_SPACING);
-      }
-    }
-  }
-
-  private stopEnemyAnimation(enemy: Enemy) {
-    if (enemy.kind !== "goomba") {
-      enemy.sprite.stop().setFrame(0);
-    } else {
-      enemy.walkTime = 0;
-      enemy.sprite.setFlipX(false);
-    }
+  private removeEnemy(enemy: Enemy) {
+    enemy.body.enable = false;
+    enemy.destroy();
+    this.enemies.splice(this.enemies.indexOf(enemy), 1);
   }
 
   private fireProjectile() {
-    if (this.marioForm !== "fire" || this.transforming) return;
+    if (this.marioForm !== "fire" || this.transforming) return false;
 
     const { x, y } = this.player.center;
     let target: Enemy | undefined;
     let closestDistance = Infinity;
 
     for (const enemy of this.enemies) {
-      if (!enemy.body.enable) continue;
+      if (
+        !enemy.body.enable ||
+        enemy.body.right <= 0 ||
+        enemy.body.left >= this.scale.width
+      )
+        continue;
       const center = enemy.body.center;
       const distance = Phaser.Math.Distance.Squared(x, y, center.x, center.y);
       if (distance < closestDistance) {
@@ -650,7 +570,7 @@ export default class GameScene extends Phaser.Scene {
         closestDistance = distance;
       }
     }
-    if (!target) return;
+    if (!target) return false;
 
     const fireball = this.add
       .sprite(x, y, "fireball", 0)
@@ -663,55 +583,7 @@ export default class GameScene extends Phaser.Scene {
       target.body.center.y,
       PROJECTILE_SPEED,
     );
-  }
-
-  private drawHealthBar(enemy: Enemy) {
-    const ratio = enemy.hp / enemy.maxHp;
-    const color =
-      ratio <= 1 / 3 ? 0xef4444 : ratio <= 2 / 3 ? 0xfacc15 : 0x22c55e;
-    enemy.healthBar
-      .clear()
-      .fillStyle(0x111827)
-      .fillRect(0, 0, HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT)
-      .fillStyle(color)
-      .fillRect(0, 0, HEALTH_BAR_WIDTH * ratio, HEALTH_BAR_HEIGHT);
-  }
-
-  private positionHealthBar({ body, healthBar }: Enemy) {
-    healthBar.setPosition(
-      body.center.x - HEALTH_BAR_WIDTH / 2,
-      Math.min(
-        body.bottom + HEALTH_BAR_GAP,
-        this.scale.height - HEALTH_BAR_HEIGHT,
-      ),
-    );
-  }
-
-  private hitEnemy(enemy: Enemy, projectile: Phaser.GameObjects.Sprite) {
-    const projectileBody = projectile.body;
-    if (projectileBody instanceof Phaser.Physics.Arcade.Body) {
-      this.enemyDirection
-        .copy(projectileBody.velocity)
-        .normalize()
-        .scale(KNOCKBACK_SPEED);
-    }
-    projectile.destroy();
-
-    enemy.hp -= 1;
-    if (enemy.hp > 0) {
-      this.drawHealthBar(enemy);
-      if (projectileBody instanceof Phaser.Physics.Arcade.Body) {
-        enemy.body.setVelocity(this.enemyDirection.x, this.enemyDirection.y);
-        enemy.knockbackRemaining = KNOCKBACK_DURATION;
-      }
-      return;
-    }
-
-    enemy.body.enable = false;
-    enemy.healthBar.destroy();
-    enemy.sprite.destroy();
-    this.enemies.splice(this.enemies.indexOf(enemy), 1);
-    this.onDefeatedChange(++this.defeated);
+    return true;
   }
 
   private clearOffscreenProjectiles() {
